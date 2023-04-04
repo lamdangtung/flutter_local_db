@@ -1,6 +1,10 @@
+import 'dart:math';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+Future<void> main() async {
   runApp(const MyApp());
 }
 
@@ -49,30 +53,56 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   int _counter = 0;
+  late final SharedPreferences prefs;
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((value) {
+      prefs = value;
+    });
+  }
 
-  void _incrementCounter() {
+  Future<void> _incrementCounter() async {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
       _counter++;
     });
+    final buffer = <int>[];
+    final users = Utils.genUsers();
+    buffer.addAll(Utils.int64GetBytes(users.length));
+    for (var user in users) {
+      buffer.addAll(user.toBytes());
+    }
+    String data = base64.encode(buffer);
+    try {
+      await prefs.setString("user", data);
+    } catch (e) {
+      debugPrint(e.toString());
+    }
+  }
+
+  void readUsers() {
+    final data = prefs.getString("user");
+    assert(data != null);
+    final buffer = base64.decode(data!);
+    var users = <User>[];
+    int index = 0;
+    Map map;
+    map = Utils.int64ReadByte(buffer, index);
+    int numUsers = map["result"];
+    index = map["index"];
+    for (int i = 0; i < numUsers; i++) {
+      var user = User.create();
+      index = user.readByte(buffer, index);
+      users.add(user);
+      debugPrint("UserId: ${user.id}");
+    }
+    debugPrint("Users: ${users.length}");
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: Center(
@@ -102,6 +132,10 @@ class _MyHomePageState extends State<MyHomePage> {
               '$_counter',
               style: Theme.of(context).textTheme.headline4,
             ),
+            ElevatedButton(
+              onPressed: readUsers,
+              child: Text("Read"),
+            ),
           ],
         ),
       ),
@@ -111,5 +145,105 @@ class _MyHomePageState extends State<MyHomePage> {
         child: const Icon(Icons.add),
       ), // This trailing comma makes auto-formatting nicer for build methods.
     );
+  }
+}
+
+class Utils {
+  static List<User> genUsers([int capacity = 100000]) {
+    var users = <User>[];
+    int numUsers = capacity;
+    for (int i = 1; i <= numUsers; i++) {
+      users.add(User(i, genString(6), genString(12)));
+      debugPrint("User: ${i}");
+    }
+    return users;
+  }
+
+  static String genString(int length) {
+    return getRandomString(length);
+  }
+
+  static final _chars =
+      'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890';
+  static Random _rnd = Random();
+
+  static String getRandomString(int length) =>
+      String.fromCharCodes(Iterable.generate(
+          length, (_) => _chars.codeUnitAt(_rnd.nextInt(_chars.length))));
+
+  static List<int> stringGetBytes(String value) {
+    List<int> result = [];
+    List<int> buff = utf8.encode(value);
+    result.addAll(int64GetBytes(buff.length));
+    result.addAll(buff);
+    return result;
+  }
+
+  static Map stringReadByte(List<int> buff, int index) {
+    Map map = int64ReadByte(buff, index);
+
+    // get byte count
+    int num = map["result"];
+    index = map["index"];
+
+    // get string
+    List<int> strBuff = buff.sublist(index, index + num);
+    String result = utf8.decode(strBuff);
+    index += num;
+
+    return {"result": result, "index": index};
+  }
+
+  static List<int> int64GetBytes(int value) {
+    ByteData bd = new ByteData(8);
+    bd.setInt64(0, value);
+    return bd.buffer.asUint8List();
+  }
+
+  static Map int64ReadByte(List<int> buff, int index) {
+    Int8List list = Int8List.fromList(buff.getRange(index, index + 8).toList());
+    index += 8;
+    return {"result": list.buffer.asByteData().getUint64(0), "index": index};
+  }
+}
+
+class User {
+  int id;
+  String username;
+  String password;
+  User(this.id, this.username, this.password);
+
+  static User create() {
+    return User(0, "", "");
+  }
+
+  List<int> toBytes() {
+    List<int> result = [];
+    result.addAll(Utils.int64GetBytes(id));
+    result.addAll(Utils.stringGetBytes(username));
+    result.addAll(Utils.stringGetBytes(password));
+    return result;
+  }
+
+  int readByte(List<int> buff, int i) {
+    int index = i;
+    Map map;
+
+    // id
+    map = Utils.int64ReadByte(buff, index);
+    this.id = map["result"];
+    index = map["index"];
+
+    // username
+    map = Utils.stringReadByte(buff, index);
+    this.username = map["result"];
+    index = map["index"];
+
+    // password
+    map = Utils.stringReadByte(buff, index);
+    this.password = map["result"];
+    index = map["index"];
+
+    return index;
   }
 }
